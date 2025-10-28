@@ -1,11 +1,33 @@
 import pandas as pd
 import plotly.express as px
 import re
+import kagglehub
+import os
+import glob
 
 # https://en.wikipedia.org/wiki/List_of_wolf_attacks
 # https://www.kaggle.com/datasets/danela/global-wolf-attacks?resource=download
 
-wolf_attacks = pd.read_csv("global_wolves.csv")
+# Try to download the dataset and load the first CSV found in the download path.
+# Fall back to the local `global_wolves.csv` if necessary.
+dataset_path = kagglehub.dataset_download("danela/global-wolf-attacks")
+print("Path to dataset files:", dataset_path)
+
+# Load CSV into a DataFrame
+if isinstance(dataset_path, str):
+    if os.path.isdir(dataset_path):
+        csv_files = glob.glob(os.path.join(dataset_path, "*.csv"))
+        if not csv_files:
+            raise FileNotFoundError(f"No CSV files found in dataset path: {dataset_path}")
+        wolf_attacks = pd.read_csv(csv_files[0])
+    elif os.path.isfile(dataset_path) and dataset_path.lower().endswith('.csv'):
+        wolf_attacks = pd.read_csv(dataset_path)
+    else:
+        # If dataset_download returned something unexpected, try local CSV
+        wolf_attacks = pd.read_csv("global_wolves.csv")
+else:
+    # Fallback: load local CSV file present in the repo
+    wolf_attacks = pd.read_csv("global_wolves.csv")
 
 def count_victims(text):
     text_lower = text.lower()
@@ -137,6 +159,17 @@ def plot_male_attacks_by_month(wolf_attacks):
     fig.update_layout(xaxis_title='Month', yaxis_title='Number of Attacks')
     fig.show()
 
+def plot_unknown_attacks_by_month(wolf_attacks):
+    # Plot unknown gender attacks by month
+    month_order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+    wolf_attacks['Month'] = pd.Categorical(wolf_attacks['Month'], categories=month_order, ordered=True)
+    month_counts = wolf_attacks[wolf_attacks['Unknown_Count'] > 0]['Month'].value_counts().reindex(month_order).fillna(0).reset_index()
+    month_counts.columns = ['Month', 'Attack_Count']
+    
+    fig = px.line(month_counts, x='Month', y='Attack_Count', title='Number of Unknown Gender Wolf Attacks by Month')
+    fig.update_layout(xaxis_title='Month', yaxis_title='Number of Attacks')
+    fig.show()
+
 def plot_males_and_females_by_month(wolf_attacks):
     # Plot male and female attacks by month with bars grouped side by side
     month_order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -164,13 +197,98 @@ def plot_males_and_females_by_month(wolf_attacks):
     fig.update_layout(xaxis_title='Month', yaxis_title='Number of Attacks', barmode='group')
     fig.show()
 
-# TODO: Another graphic for all genders (including unknown)
+# TODO: Another graphic for all genders (male, female, AND unknown)
+def plot_all_genders_by_month(wolf_attacks):
+    # 3-way bar chart for male, female, and unknown victims by month
+    month_order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+    wolf_attacks['Month'] = pd.Categorical(wolf_attacks['Month'], categories=month_order, ordered=True)
+
+    month_counts_female = wolf_attacks[wolf_attacks['Female_Count'] > 0]['Month'].value_counts().reindex(month_order).fillna(0).reset_index()
+    month_counts_female.columns = ['Month', 'Attack_Count']
+    month_counts_female['Gender'] = 'Female'
+
+    month_counts_male = wolf_attacks[wolf_attacks['Male_Count'] > 0]['Month'].value_counts().reindex(month_order).fillna(0).reset_index()
+    month_counts_male.columns = ['Month', 'Attack_Count']
+    month_counts_male['Gender'] = 'Male'
+
+    month_counts_unknown = wolf_attacks[wolf_attacks['Unknown_Count'] > 0]['Month'].value_counts().reindex(month_order).fillna(0).reset_index()
+    month_counts_unknown.columns = ['Month', 'Attack_Count']
+    month_counts_unknown['Gender'] = 'Unknown'
+
+    combined_data = pd.concat([month_counts_male, month_counts_female, month_counts_unknown])
+
+    fig = px.bar(
+        combined_data,
+        x='Month',
+        y='Attack_Count',
+        color='Gender',
+        title='Wolf Attacks by Month and Gender (Male / Female / Unknown)',
+        color_discrete_map={'Male': '#1e78b4', 'Female': '#ff7f0f', 'Unknown': '#33a02c'},
+        barmode='group'
+    )
+
+    fig.update_traces(texttemplate='%{y}', textposition='outside', textfont_color='black')
+    fig.update_layout(xaxis_title='Month', yaxis_title='Number of Attacks', barmode='group')
+    fig.show()
+
+def plot_monthly_sums_bar(monthly_sums):
+    """Plot a grouped bar chart from the monthly_sums DataFrame.
+
+    Expects a DataFrame indexed by Month with columns ['Male_Count','Female_Count','Unknown_Count'].
+    """
+    # Reset index to have Month as a column
+    df = monthly_sums.reset_index()
+    # Ensure expected columns exist
+    expected = ['Male_Count', 'Female_Count', 'Unknown_Count']
+    for col in expected:
+        if col not in df.columns:
+            df[col] = 0
+
+    # Melt to long form for px.bar
+    df_long = df.melt(id_vars='Month', value_vars=expected, var_name='Gender', value_name='Attack_Count')
+    # Clean Gender labels
+    df_long['Gender'] = df_long['Gender'].str.replace('_Count', '').str.replace('Unknown', 'Unknown')
+
+    # Order months
+    month_order = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+    df_long['Month'] = pd.Categorical(df_long['Month'], categories=month_order, ordered=True)
+
+    # Drop any rows with Month == NaN (uncounted months)
+    df_long = df_long.dropna(subset=['Month'])
+
+    fig = px.bar(
+        df_long,
+        x='Month',
+        y='Attack_Count',
+        color='Gender',
+        title='Monthly Wolf Attacks by Gender (Male / Female / Unknown)',
+        category_orders={'Month': month_order},
+        color_discrete_map={'Male': '#1e78b4', 'Female': '#ff7f0f', 'Unknown': '#33a02c'},
+        barmode='group'
+    )
+    fig.update_traces(texttemplate='%{y}', textposition='outside')
+    fig.update_layout(xaxis_title='Month', yaxis_title='Number of Attacks', barmode='group')
+    fig.show()
 
 apply_functions_to_data_frame(wolf_attacks)
-# print(wolf_attacks.iloc[280:290])
+print(wolf_attacks.iloc[28:290])
 
 # plot_attacks_by_month(wolf_attacks) # Show all (non-gendered) attacks by month
 # plot_female_attacks_by_month(wolf_attacks) # Show only female attacks by month
 # plot_male_attacks_by_month(wolf_attacks) # Show only male attacks by month
-plot_males_and_females_by_month(wolf_attacks) # Show both male and female attacks by month
-# TODO: Another graphic for all genders (including unknown)
+# plot_males_and_females_by_month(wolf_attacks) # Show both male and female attacks by month
+# plot_all_genders_by_month(wolf_attacks)
+# plot_unknown_attacks_by_month(wolf_attacks)
+
+# Get sum of all counts by gender by month
+monthly_sums = wolf_attacks.groupby('Month')[['Male_Count', 'Female_Count', 'Unknown_Count']].sum()
+print(monthly_sums)
+
+# Plot grouped bar chart from the monthly sums
+plot_monthly_sums_bar(monthly_sums)
+
+# print(wolf_attacks.info())
+
+# Print all attacks that have unknown gender victims in March
+march_unknown_attacks = wolf_attacks[(wolf_attacks['Month'] == 'March') & (wolf_attacks['Unknown_Count'] > 0)]
+print(march_unknown_attacks)
